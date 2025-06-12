@@ -17,7 +17,7 @@ https://github.com/thomasgadner/MECH-B-4-ILV-Embedded-Systems/tree/master/code-e
 #define APB_FREQ 48000000
 #define AHB_FREQ 48000000
 
-#define BAUDRATE 115200 // Baud rate set to 9600 baud per second
+#define BAUDRATE 115200 // Baud rate set to 115200 baud per second
 
 //------------------------------Button------------------------------
 #define NUCLEO64_BUTTON 13
@@ -46,27 +46,34 @@ char playerField[100] = {0};
 char enemyField[100] = {0};
 
 typedef enum {
-  HD_START    = 1,
-  DH_START_   = 2,
-  HD_CS_      = 3,
-  DH_CS_      = 4,
-  HD_BOOM_    = 5,
-  DH_BOOM_    = 6
+  NONE,
+  HD_START,
+  DH_START,
+  HD_CS,
+  DH_CS,
+  HD_BOOM,
+  DH_BOOM,
+  ERROR
 }message;
 
 uint16_t currentMessage;
+bool     fullMessageReceived;
+
+char const strHD_START[]  = "HD_START";
+char const strHD_CS[]     = "HD_CS";
+char const strHD_BOOM[]   = "HD_BOOM";
 
 typedef enum {
-  IDLE        = 10,
-  START       = 20,
-  CS_GEN      = 30,
-  FIELD_GEN   = 40,
-  FIRE        = 50,
-  EVAL_MOVE   = 60,
-  CS_CHECK    = 100
+  IDLE,
+  START,
+  CS_GEN,
+  FIELD_GEN,
+  FIRE,
+  EVAL_MOVE,
+  CALIFORNIA,
+  CS_CHECK
 }state;
 
-uint16_t currentState;
 
 //-----------------------------------------------------------------------------------------------------
 //----------------------------------------Function declarations----------------------------------------
@@ -79,6 +86,8 @@ int fifo_get(Fifo_t*, uint8_t*);
 void SystemClock_Config(void);
 
 void sendMessage(char*, int);
+
+message enumerateMessage(Fifo_t*);
 //------------------------------------------------------------------------------------
 //----------------------------------------Main----------------------------------------
 //------------------------------------------------------------------------------------
@@ -86,22 +95,22 @@ int main(void)
 {
   SystemClock_Config(); // Configure the system clock to 48 MHz
 
-  RCC->AHBENR |= RCC_AHBENR_GPIOAEN;    // Enable GPIOA clock
-  RCC->AHBENR |= RCC_AHBENR_GPIOCEN;    // Enable GPIOC clock
-  RCC->APB1ENR |= RCC_APB1ENR_USART2EN; // Enable USART2 clock
+  RCC->AHBENR     |= RCC_AHBENR_GPIOAEN;    // Enable GPIOA clock
+  RCC->AHBENR     |= RCC_AHBENR_GPIOCEN;    // Enable GPIOC clock
+  RCC->APB1ENR    |= RCC_APB1ENR_USART2EN; // Enable USART2 clock
 
-  GPIOC->MODER &= ~(0b11 << 2*NUCLEO64_BUTTON);
+  GPIOC->MODER    &= ~(0b11 << 2*NUCLEO64_BUTTON);
 
-  GPIOA->MODER |= 0b10 << (USART2_TX_PIN * 2);    // Set PA2 to Alternate Function mode
-  GPIOA->AFR[0] |= 0b0001 << (4 * USART2_TX_PIN); // Set AF for PA2 (USART2_TX)
-  GPIOA->MODER |= 0b10 << (USART2_RX_PIN * 2);    // Set PA3 to Alternate Function mode
-  GPIOA->AFR[0] |= 0b0001 << (4 * USART2_RX_PIN); // Set AF for PA3 (USART2_RX)
+  GPIOA->MODER    |= 0b10 << (USART2_TX_PIN * 2);    // Set PA2 to Alternate Function mode
+  GPIOA->AFR[0]   |= 0b0001 << (4 * USART2_TX_PIN); // Set AF for PA2 (USART2_TX)
+  GPIOA->MODER    |= 0b10 << (USART2_RX_PIN * 2);    // Set PA3 to Alternate Function mode
+  GPIOA->AFR[0]   |= 0b0001 << (4 * USART2_RX_PIN); // Set AF for PA3 (USART2_RX)
 
-  USART2->BRR = (APB_FREQ / BAUDRATE); // Set baud rate (requires APB_FREQ to be defined)
-  USART2->CR1 |= 0b1 << 2;             // Enable receiver (RE bit)
-  USART2->CR1 |= 0b1 << 3;             // Enable transmitter (TE bit)
-  USART2->CR1 |= 0b1 << 0;             // Enable USART (UE bit)
-  USART2->CR1 |= 0b1 << 5;             // Enable RXNE interrupt (RXNEIE bit)
+  USART2->BRR     = (APB_FREQ / BAUDRATE); // Set baud rate (requires APB_FREQ to be defined)
+  USART2->CR1     |= 0b1 << 2;             // Enable receiver (RE bit)
+  USART2->CR1     |= 0b1 << 3;             // Enable transmitter (TE bit)
+  USART2->CR1     |= 0b1 << 0;             // Enable USART (UE bit)
+  USART2->CR1     |= 0b1 << 5;             // Enable RXNE interrupt (RXNEIE bit)
 
   NVIC_SetPriorityGrouping(0);                               // Use 4 bits for priority, 0 bits for subpriority
   uint32_t uart_pri_encoding = NVIC_EncodePriority(0, 1, 0); // Encode priority: group 1, subpriority 0
@@ -144,6 +153,12 @@ void USART2_IRQHandler(void)
   if (USART2->ISR & USART_ISR_RXNE)
   {                                              // Check if RXNE flag is set (data received)
     uint8_t c = USART2->RDR;                     // Read received byte from RDR (this automatically clears the RXNE flag)
+    
+    if (c == '\n')
+      fullMessageReceived = true;
+    else
+      fullMessageReceived = false;
+
     ret = fifo_put((Fifo_t *)&usart_rx_fifo, c); // Put incoming Data into the FIFO Buffer for later handling
   }
 }
@@ -205,23 +220,52 @@ void SystemClock_Config(void)
   // then set 1 wait-state and enable the prefetch buffer.
   // (The device header files only show 1 bit for the F0
   //  line, but the reference manual shows 3...)
-  FLASH->ACR &= ~(FLASH_ACR_LATENCY_Msk | FLASH_ACR_PRFTBE_Msk);
-  FLASH->ACR |= (FLASH_ACR_LATENCY |
-                 FLASH_ACR_PRFTBE);
+  FLASH->ACR      &= ~(FLASH_ACR_LATENCY_Msk | FLASH_ACR_PRFTBE_Msk);
+  FLASH->ACR      |= (FLASH_ACR_LATENCY |
+                      FLASH_ACR_PRFTBE);
 
   // activate the internal 48 MHz clock
-  RCC->CR2 |= RCC_CR2_HSI48ON;
+  RCC->CR2        |= RCC_CR2_HSI48ON;
 
   // wait for clock to become stable before continuing
   while (!(RCC->CR2 & RCC_CR2_HSI48RDY))
     ;
 
   // configure the clock switch
-  RCC->CFGR = RCC->CFGR & ~RCC_CFGR_HPRE_Msk;
-  RCC->CFGR = RCC->CFGR & ~RCC_CFGR_PPRE_Msk;
-  RCC->CFGR = (RCC->CFGR & ~RCC_CFGR_SW_Msk) | (0b11 << RCC_CFGR_SW_Pos);
+  RCC->CFGR       = RCC->CFGR & ~RCC_CFGR_HPRE_Msk;
+  RCC->CFGR       = RCC->CFGR & ~RCC_CFGR_PPRE_Msk;
+  RCC->CFGR       = (RCC->CFGR & ~RCC_CFGR_SW_Msk) | (0b11 << RCC_CFGR_SW_Pos);
 
   // wait for clock switch to become stable
   while ((RCC->CFGR & RCC_CFGR_SWS) != (0b11 << RCC_CFGR_SWS_Pos))
     ;
+}
+
+//----------------------------------------Enumerate Message----------------------------------------
+message enumerateMessage(Fifo_t* Fifo) {
+  message msg = NONE;
+  static uint32_t   recChecksum;
+  static uint8_t    recBoomX;
+  static uint8_t    recBoomY;
+  static bool       recHM;
+  
+  uint8_t           cnt = 0;
+  char              buf[FIFO_SIZE] = {0};
+
+  while(msg == NONE) {
+      fifo_get(Fifo,buf[cnt]);
+
+      if(strcmp(buf,strHD_START))
+        msg = HD_START;
+      
+      if(strcmp(buf,strHD_BOOM))
+        msg = HD_BOOM;
+
+      if(strcmp(buf,strHD_CS))
+        msg = HD_CS;
+
+      if(cnt >= FIFO_SIZE-1)
+        return ERROR;
+      cnt++;
+  }
 }
