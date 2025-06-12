@@ -8,6 +8,7 @@ https://github.com/thomasgadner/MECH-B-4-ILV-Embedded-Systems/tree/master/code-e
 
 #include <stm32f0xx.h>
 #include <stdbool.h>
+#include <string.h>
 
 //---------------------------------------------------------------------------------------------------------------------
 //----------------------------------------Defines, structs and global variables----------------------------------------
@@ -16,7 +17,7 @@ https://github.com/thomasgadner/MECH-B-4-ILV-Embedded-Systems/tree/master/code-e
 #define APB_FREQ 48000000
 #define AHB_FREQ 48000000
 
-#define BAUDRATE 9600 // Baud rate set to 9600 baud per second
+#define BAUDRATE 115200 // Baud rate set to 9600 baud per second
 
 //------------------------------Button------------------------------
 #define NUCLEO64_BUTTON 13
@@ -43,6 +44,29 @@ char testString[] = {'t','e','s','t','\n'};
 //------------------------------Game------------------------------
 char playerField[100] = {0};
 char enemyField[100] = {0};
+
+typedef enum {
+  HD_START    = 1,
+  DH_START_   = 2,
+  HD_CS_      = 3,
+  DH_CS_      = 4,
+  HD_BOOM_    = 5,
+  DH_BOOM_    = 6
+}message;
+
+uint16_t currentMessage;
+
+typedef enum {
+  IDLE        = 10,
+  START       = 20,
+  CS_GEN      = 30,
+  FIELD_GEN   = 40,
+  FIRE        = 50,
+  EVAL_MOVE   = 60,
+  CS_CHECK    = 100
+}state;
+
+uint16_t currentState;
 
 //-----------------------------------------------------------------------------------------------------
 //----------------------------------------Function declarations----------------------------------------
@@ -100,13 +124,11 @@ int main(void)
         sendMessage(testString,sizeof(testString));
     }
 
-
     uint8_t byte;
     if (fifo_get((Fifo_t *)&usart_rx_fifo, &byte) == 0)
     {
       bytes_recv++; // count the Bytes Received by getting Data from the FIFO
     }
-
 
     oldButtonState = newButtonstate;
   }
@@ -158,7 +180,7 @@ uint8_t fifo_is_full(Fifo_t* fifo) {
 
 int fifo_put(Fifo_t* fifo, uint8_t data) {
     if (fifo_is_full(fifo)) {                   // Check if FIFO is full before inserting
-        return -1;                               // Insertion failed (buffer full)
+        return -1;                              // Insertion failed (buffer full)
     }
 
     fifo->buffer[fifo->head] = data;            // Store data at current head position
@@ -168,12 +190,12 @@ int fifo_put(Fifo_t* fifo, uint8_t data) {
 
 int fifo_get(Fifo_t* fifo, uint8_t* data) {
     if (fifo_is_empty(fifo)) {                  // Check if FIFO is empty before reading
-        return -1;                               // Read failed (buffer empty)
+        return -1;                              // Read failed (buffer empty)
     }
 
     *data = fifo->buffer[fifo->tail];           // Retrieve data at current tail position
     fifo->tail = (fifo->tail + 1) % FIFO_SIZE;  // Move tail forward and wrap around if needed
-    return 0;                          // Read successful Return 0
+    return 0;                                   // Read successful Return 0
 }
 
 //----------------------------------------Clock----------------------------------------
