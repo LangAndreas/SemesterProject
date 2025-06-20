@@ -53,15 +53,20 @@ typedef enum {
   DH_CS,
   HD_BOOM,
   DH_BOOM,
-  ERROR
+  INVALID
 }message;
 
 uint16_t currentMessage;
 bool     fullMessageReceived;
 
-char const strHD_START[]  = "HD_START";
-char const strHD_CS[]     = "HD_CS";
-char const strHD_BOOM[]   = "HD_BOOM";
+char const strHD_START[]    = "HD_START";
+char const strHD_CS[]       = "HD_CS";
+char const strHD_BOOM[]     = "HD_BOOM";
+char strSUCCESS[]           = "Success";
+char strFAIL[]              = "Fail";
+char strCHECK1[]            = "Check-1";
+char strCHECK2[]            = "Check-2";
+char strCHECK3[]            = "Check-3";
 
 typedef enum {
   IDLE,
@@ -133,12 +138,24 @@ int main(void)
         sendMessage(testString,sizeof(testString));
     }
 
+    if(fullMessageReceived == true) {
+      sendMessage("Message Received\n",sizeof("Message Received\n"));
+      currentMessage = enumerateMessage(&usart_rx_fifo);
+
+      if(currentMessage == HD_START){
+        sendMessage("Message type: HD_START\n",sizeof("Message type: HD_START\n"));
+      }
+
+        fullMessageReceived = false;
+      }
+    
+/*
     uint8_t byte;
     if (fifo_get((Fifo_t *)&usart_rx_fifo, &byte) == 0)
     {
       bytes_recv++; // count the Bytes Received by getting Data from the FIFO
     }
-
+*/
     oldButtonState = newButtonstate;
   }
 
@@ -152,7 +169,7 @@ void USART2_IRQHandler(void)
   static int ret; // You can do some error checking
   if (USART2->ISR & USART_ISR_RXNE)
   {                                              // Check if RXNE flag is set (data received)
-    uint8_t c = USART2->RDR;                     // Read received byte from RDR (this automatically clears the RXNE flag)
+     char c = USART2->RDR;                     // Read received byte from RDR (this automatically clears the RXNE flag)
     
     if (c == '\n')
       fullMessageReceived = true;
@@ -253,19 +270,14 @@ message enumerateMessage(Fifo_t* Fifo) {
   char              buf[FIFO_SIZE] = {0};
 
   while(msg == NONE) {
-      fifo_get(Fifo,buf[cnt]);
+      fifo_get(Fifo,&buf[cnt]);
 
-      if(strcmp(buf,strHD_START))
-        msg = HD_START;
+      if(strcmp(buf,strHD_START))       msg = HD_START;
+      else if(strcmp(buf,strHD_BOOM))   msg = HD_BOOM;
+      else if(strcmp(buf,strHD_CS))     msg = HD_CS;
+      else if(cnt >= FIFO_SIZE-1)       return INVALID;
       
-      if(strcmp(buf,strHD_BOOM))
-        msg = HD_BOOM;
-
-      if(strcmp(buf,strHD_CS))
-        msg = HD_CS;
-
-      if(cnt >= FIFO_SIZE-1)
-        return ERROR;
       cnt++;
   }
+  return msg;
 }
